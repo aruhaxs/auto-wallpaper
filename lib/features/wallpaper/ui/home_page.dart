@@ -14,48 +14,31 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   File? _selectedImage;
 
-  /// Fungsi investigasi baru untuk izin galeri.
   Future<void> _pickImageFromGallery() async {
-    print("1. Tombol ditekan. Memulai investigasi izin...");
-
-    // Meminta kedua jenis izin sekaligus
     Map<Permission, PermissionStatus> statuses = await [
       Permission.photos,
       Permission.storage,
     ].request();
 
-    // Mencetak status dari setiap izin yang kita minta
     PermissionStatus? photosStatus = statuses[Permission.photos];
     PermissionStatus? storageStatus = statuses[Permission.storage];
-    print("2. Status Izin FOTO (photos): $photosStatus");
-    print("3. Status Izin PENYIMPANAN (storage): $storageStatus");
 
-    // Lanjutkan jika SALAH SATU dari izin tersebut diberikan
-    if (photosStatus == PermissionStatus.granted || storageStatus == PermissionStatus.granted) {
-      print("4. Setidaknya satu izin DIBERIKAN. Mencoba membuka galeri...");
+    if (photosStatus == PermissionStatus.granted ||
+        storageStatus == PermissionStatus.granted) {
       final ImagePicker picker = ImagePicker();
       final XFile? pickedFile =
           await picker.pickImage(source: ImageSource.gallery);
 
-      print("5. Proses pemilihan gambar dari galeri selesai.");
       if (pickedFile != null) {
-        print("6. GAMBAR BERHASIL DIPILIH: ${pickedFile.path}");
         setState(() {
           _selectedImage = File(pickedFile.path);
         });
-      } else {
-        print("7. TIDAK ADA GAMBAR DIPILIH (pengguna membatalkan).");
       }
     } else {
-      // Jika kedua izin ditolak
-      print("8. SEMUA Izin DITOLAK. Membuka pengaturan aplikasi...");
-      // Arahkan pengguna ke pengaturan jika izin ditolak secara permanen
       await openAppSettings();
     }
-    print("9. Fungsi _pickImageFromGallery selesai dieksekusi.");
   }
 
-  /// Fungsi untuk mengatur wallpaper (tidak diubah).
   Future<void> _setWallpaper() async {
     if (_selectedImage == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -85,7 +68,6 @@ class _HomePageState extends State<HomePage> {
 
   @override
   Widget build(BuildContext context) {
-    // UI tidak diubah, tetap sama
     return Scaffold(
       appBar: AppBar(
         title: const Text('Set Wallpaper'),
