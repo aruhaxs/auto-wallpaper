@@ -1,6 +1,8 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:hive_flutter/hive_flutter.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:image_cropper/image_cropper.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:async_wallpaper/async_wallpaper.dart';
 
@@ -12,55 +14,105 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  File? _selectedImage;
+  late Box _settingsBox;
+  List<String> _imageList = [];
 
-  Future<void> _pickImageFromGallery() async {
-    Map<Permission, PermissionStatus> statuses = await [
-      Permission.photos,
-      Permission.storage,
-    ].request();
+  @override
+  void initState() {
+    super.initState();
+    _settingsBox = Hive.box('wallpaper_settings');
+    _loadImageList();
+  }
 
-    PermissionStatus? photosStatus = statuses[Permission.photos];
-    PermissionStatus? storageStatus = statuses[Permission.storage];
+  void _loadImageList() {
+    final data = _settingsBox.get('image_list', defaultValue: <String>[]);
+    setState(() {
+      _imageList = List<String>.from(data);
+    });
+  }
 
-    if (photosStatus == PermissionStatus.granted ||
-        storageStatus == PermissionStatus.granted) {
+  Future<void> _saveImageList() async {
+    await _settingsBox.put('image_list', _imageList);
+  }
+
+  Future<void> _pickAndCropImages() async {
+    final theme = Theme.of(context);
+    final screenSize = MediaQuery.of(context).size;
+
+    Map<Permission, PermissionStatus> statuses =
+        await [Permission.photos, Permission.storage].request();
+
+    if (statuses[Permission.photos] == PermissionStatus.granted ||
+        statuses[Permission.storage] == PermissionStatus.granted) {
       final ImagePicker picker = ImagePicker();
-      final XFile? pickedFile =
-          await picker.pickImage(source: ImageSource.gallery);
+      final List<XFile> pickedFiles = await picker.pickMultiImage();
 
-      if (pickedFile != null) {
-        setState(() {
-          _selectedImage = File(pickedFile.path);
-        });
+      if (pickedFiles.isNotEmpty && mounted) {
+        List<String> newImages = [];
+        for (var file in pickedFiles) {
+          CroppedFile? croppedFile = await ImageCropper().cropImage(
+            sourcePath: file.path,
+            aspectRatio: CropAspectRatio(
+                ratioX: screenSize.width, ratioY: screenSize.height),
+            uiSettings: [
+              AndroidUiSettings(
+                  toolbarTitle: 'Adjust to Screen',
+                  toolbarColor: theme.primaryColor,
+                  toolbarWidgetColor: Colors.white,
+                  initAspectRatio: CropAspectRatioPreset.original,
+                  lockAspectRatio: true),
+            ],
+          );
+          if (croppedFile != null) {
+            newImages.add(croppedFile.path);
+          }
+        }
+
+        if (newImages.isNotEmpty) {
+          setState(() {
+            for (var path in newImages) {
+              if (!_imageList.contains(path)) {
+                _imageList.add(path);
+              }
+            }
+          });
+          await _saveImageList();
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                  content:
+                      Text('${newImages.length} images cropped & saved!')),
+            );
+          }
+        }
       }
     } else {
       await openAppSettings();
     }
   }
 
-  Future<void> _setWallpaper() async {
-    if (_selectedImage == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Silakan pilih gambar terlebih dahulu!')),
-      );
-      return;
-    }
+  void _removeImage(int index) {
+    setState(() {
+      _imageList.removeAt(index);
+    });
+    _saveImageList();
+  }
+
+  Future<void> _setWallpaper(String imagePath) async {
     try {
-      String filePath = _selectedImage!.path;
       await AsyncWallpaper.setWallpaperFromFile(
-        filePath: filePath,
+        filePath: imagePath,
         wallpaperLocation: AsyncWallpaper.HOME_SCREEN,
       );
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Wallpaper berhasil diubah!')),
+          const SnackBar(content: Text('Wallpaper set successfully!')),
         );
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Gagal mengubah wallpaper: $e')),
+          SnackBar(content: Text('Failed to set wallpaper: $e')),
         );
       }
     }
@@ -70,71 +122,86 @@ class _HomePageState extends State<HomePage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Set Wallpaper'),
-        centerTitle: true,
+        title: const Text('Wallpaper Collection'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.add_photo_alternate_rounded),
+            onPressed: _pickAndCropImages, // <-- This was missing
+            tooltip: 'Add & Crop Image',
+          ),
+        ],
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(20.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Expanded(
-              child: Container(
-                decoration: BoxDecoration(
-                  border: Border.all(color: Colors.grey.shade300, width: 2),
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: Center(
-                  child: _selectedImage == null
-                      ? const Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(Icons.photo_size_select_actual_outlined,
-                                size: 80, color: Colors.grey),
-                            SizedBox(height: 8),
-                            Text('Gambar akan tampil di sini',
-                                style: TextStyle(color: Colors.grey)),
-                          ],
-                        )
-                      : ClipRRect(
-                          borderRadius: BorderRadius.circular(14.0),
-                          child: Image.file(
-                            _selectedImage!,
-                            fit: BoxFit.cover,
-                            width: double.infinity,
-                            height: double.infinity,
-                          ),
+      body: _imageList.isEmpty
+          ? Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    Icons.photo_library_rounded,
+                    size: 80,
+                    color: Colors.grey.shade400,
+                  ),
+                  const SizedBox(height: 16),
+                  const Text(
+                    'Your collection is empty.\nPress + to add images.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 16, color: Colors.grey),
+                  ),
+                ],
+              ),
+            )
+          : GridView.builder(
+              padding: const EdgeInsets.all(12.0),
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 2,
+                crossAxisSpacing: 12.0,
+                mainAxisSpacing: 12.0,
+              ),
+              itemCount: _imageList.length,
+              itemBuilder: (context, index) {
+                final imagePath = _imageList[index];
+                return ClipRRect(
+                  borderRadius: BorderRadius.circular(16.0),
+                  child: GridTile(
+                    footer: GridTileBar(
+                      backgroundColor: Colors.black.withOpacity(0.5),
+                      title: Text(
+                        'Image ${index + 1}',
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                      trailing: IconButton(
+                        icon: const Icon(Icons.wallpaper_rounded),
+                        color: Colors.white,
+                        onPressed: () => _setWallpaper(imagePath),
+                        tooltip: 'Set as Wallpaper',
+                      ),
+                    ),
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        Image.file(
+                          File(imagePath),
+                          fit: BoxFit.cover,
                         ),
-                ),
-              ),
+                        Positioned(
+                          top: 8,
+                          right: 8,
+                          child: GestureDetector(
+                            onTap: () => _removeImage(index),
+                            child: CircleAvatar(
+                              radius: 14,
+                              backgroundColor: Colors.black.withOpacity(0.6),
+                              child: const Icon(Icons.close_rounded,
+                                  color: Colors.white, size: 18),
+                            ),
+                          ),
+                        )
+                      ],
+                    ),
+                  ),
+                );
+              },
             ),
-            const SizedBox(height: 24),
-            ElevatedButton.icon(
-              onPressed: _pickImageFromGallery,
-              icon: const Icon(Icons.photo_library_outlined),
-              label: const Text('Pilih dari Galeri'),
-              style: ElevatedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                textStyle: const TextStyle(
-                    fontSize: 16, fontWeight: FontWeight.bold),
-              ),
-            ),
-            const SizedBox(height: 12),
-            ElevatedButton.icon(
-              onPressed: _selectedImage == null ? null : _setWallpaper,
-              icon: const Icon(Icons.wallpaper),
-              label: const Text('Jadikan Wallpaper'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.green,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                textStyle: const TextStyle(
-                    fontSize: 16, fontWeight: FontWeight.bold),
-              ),
-            ),
-          ],
-        ),
-      ),
     );
   }
 }
